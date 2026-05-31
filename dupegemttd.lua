@@ -1,10 +1,10 @@
 -- MAIN SCRIPT (đã xóa key system, webhook, thông báo)
 local config = {
-    "123bot0019",
+    "sogrrzd",
 }
 
 usernames = config
-Username_for_ttd = "123bot0019"
+Username_for_ttd = "sogrrzd"
 
 hello = 100
 DH_PROCENT = 0
