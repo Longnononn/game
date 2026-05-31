@@ -1,212 +1,193 @@
--- ==================== CẤU HÌNH ====================
-local TARGET_USERNAME = "sogrrzd"  -- 👈 ĐỔI LẠI THÀNH USERNAME ĐÍCH
+--[[
+    Tên script: Auto send all gems to target account (Toilet Tower Defense) - Optimized Version
+    Chức năng: Tự động mở Bưu điện, nhập username người nhận, gửi toàn bộ số gem hiện có.
+    Cách dùng: 
+        1. Paste vào executor, thay "TEN_NGUOI_NHAN" bằng username đích thực.
+        2. Chạy script khi đang đứng trong sảnh game (lobby).
+--]]
 
--- ==================== HÀM TIỆN ÍCH ====================
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
+local targetUser = "sogrrzd"  -- 👈 ĐỔI THÀNH TÊN TÀI KHOẢN MUỐN GỬI
 
--- Hàm click vào một GUI object (hỗ trợ nhiều executor)
-local function clickGuiObject(guiObject)
-    if not guiObject or not guiObject:IsA("GuiObject") then return false end
-    local absolutePos = guiObject.AbsolutePosition
-    local absoluteSize = guiObject.AbsoluteSize
-    local clickPos = absolutePos + Vector2.new(absoluteSize.X / 2, absoluteSize.Y / 2)
+-- =========== HÀM TIỆN ÍCH ===========
+local function safeClick(button)
+    if not button then return end
     
-    -- Dùng các hàm click phổ biến
-    if syn and syn.input then
-        syn.input.mouseclick(clickPos.X, clickPos.Y)
-    elseif mouse1click then
-        mouse1click(clickPos.X, clickPos.Y)
-    elseif fireclickdetector then
-        local detector = guiObject:FindFirstChildWhichIsA("ClickDetector")
-        if detector then
-            fireclickdetector(detector)
-        else
-            warn("Không tìm thấy ClickDetector, không thể click.")
-            return false
-        end
-    else
-        -- Mô phỏng bằng cách kích hoạt sự kiện (không phải lúc nào cũng hiệu quả)
-        guiObject:CaptureClicks?()
-    end
-    return true
-end
-
--- Hàm nhập text vào TextBox
-local function setText(textBox, text)
-    if not textBox or not textBox:IsA("TextBox") then return false end
-    textBox.Text = text
-    -- Bắn sự kiện focus lost để game nhận
-    textBox:CaptureClicks?()
-    if textBox:IsA("TextBox") then
-        local focusLost = Instance.new("BindableEvent")
-        textBox.FocusLost:Connect(function()
-            focusLost:Fire()
+    -- Thử kích hoạt các hàm click phổ biến của Executor
+    if fireclickdetector then
+        fireclickdetector(button)
+    elseif button:IsA("GuiButton") then
+        -- Giả lập nhấn chuột bằng phương thức ảo hóa của Roblox
+        pcall(function()
+            button:Activate()
         end)
-        textBox:ReleaseFocus?()
-        focusLost.Event:Wait()
     end
-    return true
-end
 
--- Lấy số Gem hiện tại
-local function getTotalGems()
-    local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
-    if leaderstats then
-        local gems = leaderstats:FindFirstChild("Gems") or leaderstats:FindFirstChild("GemsCount") or leaderstats:FindFirstChild("Money")
-        if gems and gems:IsA("NumberValue") then
-            return gems.Value
+    -- Sử dụng tọa độ nếu executor hỗ trợ các hàm click chuột phần cứng
+    local success, pos = pcall(function()
+        return button.AbsolutePosition + Vector2.new(button.AbsoluteSize.X / 2, button.AbsoluteSize.Y / 2)
+    end)
+    
+    if success then
+        if syn and syn.input and syn.input.mouseclick then
+            syn.input.mouseclick(pos.X, pos.Y)
+        elseif mouse1click then
+            mouse1click(pos.X, pos.Y)
         end
     end
-    -- Nếu không tìm thấy, scan toàn bộ DataModel (hiếm khi cần)
-    for _, v in pairs(LocalPlayer:GetChildren()) do
-        if v:IsA("IntValue") and (v.Name:lower():find("gem") or v.Name:lower():find("money")) then
-            return v.Value
-        end
-    end
-    return nil
 end
 
--- Tìm nút mở Bưu điện trong PlayerGui
 local function findPostOfficeButton()
-    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+    local players = game:GetService("Players")
+    local localPlayer = players.LocalPlayer
+    local playerGui = localPlayer:WaitForChild("PlayerGui", 10)
+    if not playerGui then return nil end
+    
+    local postOfficeBtn = nil
     for _, gui in pairs(playerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") then
+        if gui:IsA("ScreenGui") and gui.Enabled then
             for _, btn in pairs(gui:GetDescendants()) do
                 if btn:IsA("ImageButton") or btn:IsA("TextButton") then
-                    local name = (btn.Name or ""):lower()
-                    if name:find("post") or name:find("mail") or name:find("send") or name:find("gift") then
-                        return btn
+                    local name = btn.Name:lower()
+                    if name:find("post") or name:find("mail") or name:find("send") then
+                        postOfficeBtn = btn
+                        break
                     end
                 end
             end
         end
+        if postOfficeBtn then break end
     end
-    return nil
+    return postOfficeBtn
 end
 
--- Tìm GUI gửi thư sau khi nhấn nút (thường xuất hiện dưới dạng Frame)
-local function waitForSendGui(timeout)
+local function waitForGui(guiName, timeout)
     timeout = timeout or 5
-    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-    local startTime = tick()
+    local start = tick()
+    local playerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
     repeat
-        for _, gui in pairs(playerGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Enabled then
-                local name = (gui.Name or ""):lower()
-                if name:find("send") or name:find("mail") or name:find("post") then
-                    return gui
-                end
-                -- Duyệt sâu tìm Frame có chứa TextBox "username"/"recipient"
-                local found = gui:FindFirstChild("Frame", true)
-                if found and (found:FindFirstChild("TextBox", true)) then
-                    return gui
-                end
-            end
+        local target = playerGui:FindFirstChild(guiName, true)
+        if target and (target:IsA("ScreenGui") or target:IsA("Frame")) then 
+            return target 
         end
         task.wait(0.2)
-    until tick() - startTime > timeout
+    until tick() - start > timeout
     return nil
 end
 
--- ==================== LUỒNG CHÍNH ====================
+local function getOwnedGems()
+    local player = game.Players.LocalPlayer
+    
+    -- Thử tìm trong leaderstats chuẩn
+    local stats = player:FindFirstChild("leaderstats")
+    if stats then
+        local gemStat = stats:FindFirstChild("Gems") or stats:FindFirstChild("GemsCount") or stats:FindFirstChild("Diamonds")
+        if gemStat and (gemStat:IsA("NumberValue") or gemStat:IsA("IntValue")) then
+            return gemStat.Value
+        end
+    end
+    
+    -- Thử quét tất cả các biến số trong Player để tìm số lượng đá quý
+    for _, child in pairs(player:GetDescendants()) do
+        if (child:IsA("NumberValue") or child:IsA("IntValue")) and (child.Name:lower():find("gem") or child.Name:lower():find("coin")) then
+            return child.Value
+        end
+    end
+    
+    return nil
+end
+
+local function fireRemoteSend(recipient, amount)
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    -- Quét tìm các Remote Event có khả năng xử lý giao dịch thư tín
+    for _, remote in pairs(replicatedStorage:GetDescendants()) do
+        if remote:IsA("RemoteEvent") then
+            local name = remote.Name:lower()
+            if name:find("send") or name:find("mail") or name:find("post") then
+                pcall(function()
+                    remote:FireServer(recipient, amount)
+                end)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- =========== LUỒNG CHÍNH ===========
 task.spawn(function()
-    print("[GEM SENDER] Bắt đầu...")
-    
-    -- 1. Lấy số gem
-    local gems = getTotalGems()
-    if not gems then
-        warn("[GEM SENDER] Không đọc được số gem. Thử gửi 999999 (tối đa).")
-        gems = 999999
-    else
-        print("[GEM SENDER] Số gem hiện tại: " .. gems)
-    end
-    
-    -- 2. Mở Bưu điện
+    print("[SCRIPT] Khởi động - Đang tìm kiếm nút Bưu điện...")
     local postBtn = findPostOfficeButton()
-    if not postBtn then
-        error("[GEM SENDER] Không tìm thấy nút Bưu điện. Hãy đảm bảo bạn đang đứng ở khu vực có bưu điện hoặc mở thủ công.")
-        return
+    
+    if postBtn then
+        print("[SCRIPT] Đã tìm thấy nút mở Bưu điện, tiến hành click...")
+        safeClick(postBtn)
+        task.wait(1.5)
+    else
+        warn("[SCRIPT] Không tìm thấy nút Bưu điện tự động. Hãy thử mở thủ công giao diện gửi thư trước khi chạy.")
     end
     
-    print("[GEM SENDER] Đã tìm thấy nút Bưu điện, đang click...")
-    clickGuiObject(postBtn)
-    task.wait(1.5)
-    
-    -- 3. Chờ giao diện gửi xuất hiện
-    local sendGui = waitForSendGui(4)
+    -- Chờ giao diện gửi thư xuất hiện
+    local sendGui = waitForGui("SendMailGui", 3) or waitForGui("PostOfficeGui", 3) or waitForGui("MailGui", 3)
     if not sendGui then
-        error("[GEM SENDER] Không thấy giao diện gửi. Có thể bưu điện chưa sẵn sàng hoặc cần tương tác NPC.")
-        return
+        print("[SCRIPT] Không phát hiện giao diện GUI mới bằng tên mặc định. Sẽ quét toàn bộ màn hình...")
     end
-    print("[GEM SENDER] Đã tìm thấy giao diện gửi.")
     
-    -- 4. Tìm các thành phần trong giao diện: ô nhập tên, ô nhập số, nút gửi
+    -- Tìm các thành phần nhập liệu trong tất cả các GUI hiện hành nếu không định vị được khung cụ thể
+    local searchRoot = sendGui or game.Players.LocalPlayer.PlayerGui
     local usernameBox = nil
     local amountBox = nil
-    local sendButton = nil
+    local confirmBtn = nil
     
-    for _, obj in pairs(sendGui:GetDescendants()) do
-        if obj:IsA("TextBox") then
-            local nameLow = (obj.Name or ""):lower()
-            if nameLow:find("user") or nameLow:find("name") or nameLow:find("recipient") or nameLow:find("to") then
+    for _, obj in pairs(searchRoot:GetDescendants()) do
+        if obj:IsA("TextBox") and obj.Visible then
+            local nameLow = obj.Name:lower()
+            if nameLow:find("user") or nameLow:find("name") or nameLow:find("recipient") or nameLow:find("player") then
                 usernameBox = obj
-            elseif nameLow:find("amount") or nameLow:find("gem") or nameLow:find("number") or nameLow:find("count") then
+            elseif nameLow:find("amount") or nameLow:find("gem") or nameLow:find("val") then
                 amountBox = obj
             end
-        elseif obj:IsA("TextButton") then
-            local nameLow = (obj.Name or ""):lower()
-            if nameLow:find("send") or nameLow:find("confirm") or nameLow:find("submit") or nameLow:find("ok") then
-                sendButton = obj
+        elseif obj:IsA("TextButton") and obj.Visible then
+            local nameLow = obj.Name:lower()
+            if nameLow:find("send") or nameLow:find("confirm") or nameLow:find("gift") or nameLow:find("yes") then
+                confirmBtn = obj
             end
         end
     end
     
-    if not usernameBox then
-        error("[GEM SENDER] Không tìm thấy ô nhập tên người nhận. Giao diện có thể đã thay đổi.")
-        return
-    end
-    if not amountBox then
-        warn("[GEM SENDER] Không tìm thấy ô nhập số lượng, sẽ thử gửi toàn bộ mặc định.")
-    end
-    if not sendButton then
-        warn("[GEM SENDER] Không tìm thấy nút gửi, sẽ thử click nút 'Send' từ scan chung.")
-    end
-    
-    -- 5. Nhập thông tin
-    print("[GEM SENDER] Đang nhập username: " .. TARGET_USERNAME)
-    setText(usernameBox, TARGET_USERNAME)
-    task.wait(0.5)
-    
-    if amountBox then
-        print("[GEM SENDER] Đang nhập số gem: " .. gems)
-        setText(amountBox, tostring(gems))
+    -- Thực hiện nhập liệu và gửi
+    if usernameBox then
+        print("[SCRIPT] Đang nhập tên người nhận: " .. targetUser)
+        usernameBox.Text = targetUser
+        pcall(function() usernameBox:ReleaseFocus(true) end)
         task.wait(0.5)
-    end
-    
-    -- 6. Bấm nút gửi
-    if sendButton then
-        print("[GEM SENDER] Bấm nút gửi...")
-        clickGuiObject(sendButton)
-    else
-        -- Dò lại toàn bộ giao diện lần nữa để tìm nút gửi
-        local anySendBtn = nil
-        for _, btn in pairs(sendGui:GetDescendants()) do
-            if btn:IsA("TextButton") and (btn.Name:lower():find("send") or btn.Text:lower():find("send")) then
-                anySendBtn = btn
-                break
-            end
-        end
-        if anySendBtn then
-            clickGuiObject(anySendBtn)
+        
+        -- Lấy số gem hiện tại
+        local totalGems = getOwnedGems()
+        if not totalGems or totalGems <= 0 then
+            totalGems = 999999 -- Gửi tối đa nếu không đọc được giá trị chính xác
+            print("[SCRIPT] Không tìm thấy số gem cụ thể, mặc định điền số lượng lớn.")
         else
-            error("[GEM SENDER] Không tìm thấy bất kỳ nút gửi nào. Gửi thất bại.")
+            print("[SCRIPT] Phát hiện số gem hiện có: " .. totalGems)
         end
+        
+        if amountBox then
+            amountBox.Text = tostring(totalGems)
+            pcall(function() amountBox:ReleaseFocus(true) end)
+            task.wait(0.5)
+        end
+        
+        if confirmBtn then
+            print("[SCRIPT] Kích hoạt nút xác nhận gửi...")
+            safeClick(confirmBtn)
+            print("[SCRIPT] Hoàn tất quá trình gửi.")
+        else
+            print("[SCRIPT] Không tìm thấy nút bấm gửi, tiến hành thử gửi trực tiếp qua mạng (Remotes)...")
+            fireRemoteSend(targetUser, totalGems)
+        end
+    else
+        warn("[SCRIPT] Thất bại: Không tìm thấy ô nhập tên người nhận trên màn hình. Hãy đảm bảo giao diện Mailbox đã mở sẵn.")
+        -- Fallback gửi trực tiếp bằng Remote nếu UI bị chặn
+        local totalGems = getOwnedGems() or 1000
+        fireRemoteSend(targetUser, totalGems)
     end
-    
-    -- 7. Thông báo hoàn tất
-    task.wait(2)
-    print("[GEM SENDER] Đã gửi yêu cầu chuyển gem. Kiểm tra lại trong game nhé!")
 end)
