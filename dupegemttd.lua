@@ -1,12 +1,51 @@
 --[[
-    Tên script: Auto send all gems to target account (Toilet Tower Defense) - Fixed Version
-    Chức năng: Tự động mở Bưu điện, nhập username người nhận, gửi toàn bộ số gem hiện có.
+    Tên script: Auto send all gems to target account (Toilet Tower Defense) - Visual Status Version
+    Chức năng: Tự động mở Bưu điện, nhập username người nhận, gửi toàn bộ số gem hiện có và hiển thị trạng thái trên màn hình.
     Cách dùng: 
         1. Paste vào executor, thay "TEN_NGUOI_NHAN" bằng username đích thực.
         2. Chạy script khi đang đứng trong sảnh game (lobby).
 --]]
 
 local targetUser = "sogrrzd"  -- 👈 ĐỔI THÀNH TÊN TÀI KHOẢN MUỐN GỬI
+
+-- =========== TẠO GIAO DIỆN TRẠNG THÁI (STATUS GUI) ===========
+local player = game:GetService("Players").LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Xóa GUI cũ nếu có
+if playerGui:FindFirstChild("GemTransferStatus") then
+    playerGui.GemTransferStatus:Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "GemTransferStatus"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(0, 300, 0, 50)
+statusLabel.Position = UDim2.new(0.5, -150, 0.1, 0) -- Hiển thị ở phía trên giữa màn hình
+statusLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+statusLabel.BackgroundTransparency = 0.2
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.TextSize = 16
+statusLabel.Font = Enum.Font.SourceSansBold
+statusLabel.Text = "[HỆ THỐNG] Đang chuẩn bị..."
+statusLabel.Parent = screenGui
+
+-- Bo góc cho giao diện đẹp hơn
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 8)
+uiCorner.Parent = statusLabel
+
+local function setStatus(text, color)
+    statusLabel.Text = "[HỆ THỐNG] " .. text
+    if color then
+        statusLabel.TextColor3 = color
+    else
+        statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    end
+end
 
 -- =========== HÀM TIỆN ÍCH ===========
 local function safeClick(button)
@@ -39,11 +78,6 @@ local function safeClick(button)
 end
 
 local function findPostOfficeButton()
-    local players = game:GetService("Players")
-    local localPlayer = players.LocalPlayer
-    local playerGui = localPlayer:WaitForChild("PlayerGui", 10)
-    if not playerGui then return nil end
-    
     local postOfficeBtn = nil
     for _, gui in pairs(playerGui:GetChildren()) do
         if gui:IsA("ScreenGui") and gui.Enabled then
@@ -65,7 +99,6 @@ end
 local function waitForGui(guiName, timeout)
     timeout = timeout or 5
     local start = tick()
-    local playerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
     repeat
         local target = playerGui:FindFirstChild(guiName, true)
         if target and (target:IsA("ScreenGui") or target:IsA("Frame")) then 
@@ -77,8 +110,6 @@ local function waitForGui(guiName, timeout)
 end
 
 local function getOwnedGems()
-    local player = game.Players.LocalPlayer
-    
     -- Thử tìm trong leaderstats chuẩn
     local stats = player:FindFirstChild("leaderstats")
     if stats then
@@ -117,25 +148,24 @@ end
 
 -- =========== LUỒNG CHÍNH ===========
 task.spawn(function()
-    print("[SCRIPT] Khởi động - Đang tìm kiếm nút Bưu điện...")
+    setStatus("Đang tìm nút Bưu điện...", Color3.fromRGB(255, 200, 0))
     local postBtn = findPostOfficeButton()
     
     if postBtn then
-        print("[SCRIPT] Đã tìm thấy nút mở Bưu điện, tiến hành click...")
+        setStatus("Đã thấy nút Bưu điện, đang mở...", Color3.fromRGB(100, 255, 100))
         safeClick(postBtn)
         task.wait(1.5)
     else
-        warn("[SCRIPT] Không tìm thấy nút Bưu điện tự động. Hãy thử mở thủ công giao diện gửi thư trước khi chạy.")
+        setStatus("Không thấy nút tự động. Hãy tự mở thủ công!", Color3.fromRGB(255, 100, 100))
+        task.wait(2)
     end
     
     -- Chờ giao diện gửi thư xuất hiện
+    setStatus("Đang quét giao diện gửi thư...")
     local sendGui = waitForGui("SendMailGui", 3) or waitForGui("PostOfficeGui", 3) or waitForGui("MailGui", 3)
-    if not sendGui then
-        print("[SCRIPT] Không phát hiện giao diện GUI mới bằng tên mặc định. Sẽ quét toàn bộ màn hình...")
-    end
     
-    -- Tìm các thành phần nhập liệu trong tất cả các GUI hiện hành nếu không định vị được khung cụ thể
-    local searchRoot = sendGui or game.Players.LocalPlayer.PlayerGui
+    -- Tìm các thành phần nhập liệu
+    local searchRoot = sendGui or playerGui
     local usernameBox = nil
     local amountBox = nil
     local confirmBtn = nil
@@ -158,7 +188,7 @@ task.spawn(function()
     
     -- Thực hiện nhập liệu và gửi
     if usernameBox then
-        print("[SCRIPT] Đang nhập tên người nhận: " .. targetUser)
+        setStatus("Đang nhập tên người nhận...", Color3.fromRGB(100, 200, 255))
         usernameBox.Text = targetUser
         pcall(function() usernameBox:ReleaseFocus(true) end)
         task.wait(0.5)
@@ -166,11 +196,12 @@ task.spawn(function()
         -- Lấy số gem hiện tại
         local totalGems = getOwnedGems()
         if not totalGems or totalGems <= 0 then
-            totalGems = 999999 -- Gửi tối đa nếu không đọc được giá trị chính xác
-            print("[SCRIPT] Không tìm thấy số gem cụ thể, mặc định điền số lượng lớn.")
+            totalGems = 999999
+            setStatus("Không đọc được số gem, điền mặc định.", Color3.fromRGB(255, 150, 100))
         else
-            print("[SCRIPT] Phát hiện số gem hiện có: " .. totalGems)
+            setStatus("Gems hiện có: " .. totalGems, Color3.fromRGB(100, 255, 100))
         end
+        task.wait(0.5)
         
         if amountBox then
             amountBox.Text = tostring(totalGems)
@@ -179,17 +210,24 @@ task.spawn(function()
         end
         
         if confirmBtn then
-            print("[SCRIPT] Kích hoạt nút xác nhận gửi...")
+            setStatus("Đang nhấn nút gửi...", Color3.fromRGB(100, 255, 100))
             safeClick(confirmBtn)
-            print("[SCRIPT] Hoàn tất quá trình gửi.")
+            setStatus("ĐÃ GỬI THÀNH CÔNG!", Color3.fromRGB(0, 255, 0))
         else
-            print("[SCRIPT] Không tìm thấy nút bấm gửi, tiến hành thử gửi trực tiếp qua mạng (Remotes)...")
+            setStatus("Thử gửi trực tiếp qua Remote...", Color3.fromRGB(255, 200, 0))
             fireRemoteSend(targetUser, totalGems)
+            setStatus("Đã gửi lệnh qua Remote!", Color3.fromRGB(0, 255, 0))
         end
     else
-        warn("[SCRIPT] Thất bại: Không tìm thấy ô nhập tên người nhận trên màn hình. Hãy đảm bảo giao diện Mailbox đã mở sẵn.")
-        -- Fallback gửi trực tiếp bằng Remote nếu UI bị chặn
+        setStatus("Không thấy ô nhập liệu! Hãy mở sẵn bảng Mail.", Color3.fromRGB(255, 100, 100))
+        -- Thử gửi dự phòng qua Remote nếu UI bị lỗi
         local totalGems = getOwnedGems() or 1000
         fireRemoteSend(targetUser, totalGems)
+    end
+    
+    -- Tự động ẩn thông báo sau 5 giây khi hoàn tất
+    task.wait(5)
+    if screenGui then
+        screenGui:Destroy()
     end
 end)
